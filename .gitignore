@@ -1,0 +1,22 @@
+# окружение и промежуточные файлы сборки кадров
+.venv/
+.build/
+__pycache__/
+.DS_Store
+
+# служебные папки инструментов
+.claude/
+.superdesign/
+
+# исходники медиа — в публикацию не идут
+assets/*.mp4
+assets/obj-*.png
+assets/case-*.png
+assets/mascot-frame-*.png
+assets/mascot-clean-*.png
+assets/mascot-cut-*.png
+
+# внутренние документы и черновики
+*.md
+draft.html
+_dark-version-backup.html

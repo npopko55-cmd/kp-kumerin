@@ -1,0 +1,732 @@
+<!DOCTYPE html><html lang="ru"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <title>КП — AI-автоматизация</title>
+  <link rel="preload" as="image" href="assets/poster.webp">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;800;900&display=swap');
+
+    :root {
+      --acid: #C2F53F;
+      --ink: #0A0A0A;
+      --pad: 32px;                 /* px-8  */
+    }
+    @media (min-width: 768px)  { :root { --pad: 48px } }   /* md:px-12 */
+    @media (min-width: 1024px) { :root { --pad: 80px } }   /* lg:px-20 */
+
+    :root {
+      /* Ширина маскота считается ОТ ЦЕНТРАЛЬНОЙ КОЛОНКИ, а не от высоты экрана:
+         иначе на высоком экране фигура вылезает за колонку и накрывает текст.
+         Третий член ограничивает по высоте вьюпорта. */
+      --content-w: calc(min(100vw, 1440px) - var(--pad) * 2);
+      --col-center: calc(var(--content-w) * 0.32);
+      --mascot-w: min(
+        clamp(260px, 30vw, 460px),
+        calc(var(--col-center) * 1.04),
+        calc(100dvh * 834 / 1112)
+      );
+    }
+
+    html { overflow-x: clip; }
+
+    body {
+      font-family: 'Onest', sans-serif;
+      background-color: #FFFFFF;
+      color: var(--ink);
+      margin: 0;
+      overflow-x: hidden;
+    }
+
+    .text-acid-green { color: var(--acid); }
+    .bg-acid-green { background-color: var(--acid); }
+
+    /* Полосы — кислотный цвет дозированно, opacity <= .10 */
+    .diag-band {
+      background-color: rgba(194, 245, 63, 0.09);
+      transform: rotate(-12deg);
+      pointer-events: none;
+    }
+
+    /* Единый источник света — свечение за фигурой. Без зелёного inset. */
+    .card-shadow { box-shadow: 0 16px 40px -14px rgba(10, 10, 10, 0.14); }
+
+    .tracking-tight-custom { letter-spacing: -0.03em; }
+    .leading-tight-custom { line-height: 1; }
+
+    .tech-grid {
+      background-image:
+        linear-gradient(rgba(10,10,10,0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(10,10,10,0.05) 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+
+    .dot-grid {
+      background-image: radial-gradient(rgba(10,10,10,0.15) 1px, transparent 1px);
+      background-size: 20px 20px;
+    }
+
+    .ghost-type {
+      -webkit-text-stroke: 2px rgba(10, 10, 10, 0.07);
+      color: transparent;
+      font-size: 22vw;
+      line-height: 0.8;
+      font-weight: 900;
+      white-space: nowrap;
+      pointer-events: none;
+      user-select: none;
+      text-transform: uppercase;
+    }
+
+    /* Зерно поверх всего, но без z-index-войн */
+    .grain {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      pointer-events: none;
+      opacity: 0.03;
+    }
+
+    /* ---------- Секции: min-height: 100dvh вместо фиксированной высоты вьюпорта
+                  (иначе скачет из-за адресной строки iOS) ---------- */
+    .screen {
+      position: relative;
+      width: 100%;
+      min-height: 100dvh;
+      display: flex;
+      overflow: hidden;
+    }
+    .screen--stack {
+      flex-direction: column;
+      justify-content: center;
+      padding: 80px var(--pad);
+    }
+    .screen-inner {
+      position: relative;
+      z-index: 20;
+      flex: 1 1 100%;
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+      padding-left: var(--pad);
+      padding-right: var(--pad);
+    }
+
+    /* Специфичность 0,2,0 — чтобы утилиты Tailwind из CDN не перебивали раскладку */
+    .screen .layout-col-left   { width: 34%; }
+    .screen .layout-col-center { width: 32%; position: relative; }
+    .screen .layout-col-right  { width: 34%; }
+    .screen .col-pad-r { padding-right: 32px; }
+    .screen .col-pad-l { padding-left: 32px; }
+    .screen .col-mid { display: flex; flex-direction: column; justify-content: center; }
+    .screen .col-num { display: flex; align-items: center; justify-content: center; }
+
+    /* Заголовок титула: целиком внутри левой колонки, балансированные строки */
+    .title-1 {
+      font-size: clamp(2.2rem, 3.6vw, 4.2rem);
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+      font-weight: 900;
+      max-width: 100%;
+      text-wrap: balance;
+      overflow-wrap: break-word;
+    }
+    /* На трёхколоночной раскладке дополнительно ограничиваем кегль шириной
+       левой колонки: самое длинное слово «AI-автоматизация» занимает 8.59em
+       в Onest 900 с трекингом -0.04em. Без этого при 3.6vw оно не влезает в
+       колонку и рвётся по дефису, оставляя висячее «AI-» отдельной строкой. */
+    @media (min-width: 1024px) {
+      .title-1 {
+        font-size: min(
+          clamp(2.2rem, 3.6vw, 4.2rem),
+          calc((var(--content-w) * 0.34 - 32px) / 8.7)
+        );
+      }
+    }
+
+    /* Абзацы — не длиннее 40ch */
+    p { max-width: 40ch; }
+
+    .price { font-variant-numeric: tabular-nums; }
+
+    .num-ghost {
+      font-size: clamp(10rem, 15vw, 20rem);
+      font-weight: 900;
+      line-height: 1;
+      color: transparent;
+      -webkit-text-stroke: 2px rgba(10, 10, 10, 0.07);
+      pointer-events: none;
+      user-select: none;
+    }
+
+    /* ---------- Слой маскота ---------- */
+    #mascot-stage {
+      position: fixed;
+      left: 50%;
+      bottom: 0;
+      transform: translateX(-50%);
+      z-index: 20;
+      pointer-events: none;
+      width: var(--mascot-w);
+      aspect-ratio: 834 / 1112;
+      max-height: 100dvh;
+      opacity: var(--mascot-fade, 1);
+      transition: opacity .4s cubic-bezier(.32, .72, 0, 1);
+    }
+    /* Единственный сильный источник кислотного цвета на странице */
+    .mascot-glow {
+      position: absolute;
+      left: 50%;
+      bottom: 6%;
+      transform: translateX(-50%);
+      width: 110%;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      opacity: .7;
+      z-index: 0;
+      background: radial-gradient(circle, rgba(194,245,63,.55) 0%, rgba(194,245,63,0) 66%);
+    }
+    #mascot-poster,
+    #mascot-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+    }
+    #mascot-poster { z-index: 1; }
+    #mascot-canvas { z-index: 2; }
+
+    @media (prefers-reduced-motion: reduce) {
+      #mascot-canvas { display: none; }
+      #mascot-stage { transition: none; }
+    }
+
+    /* ---------- <= 1023px: одна колонка, маскот уходит на задний план ---------- */
+    @media (max-width: 1023px) {
+      #mascot-stage {
+        z-index: 0;
+        opacity: calc(var(--mascot-fade, 1) * .22);
+        width: min(70vw, calc(60dvh * 834 / 1112));
+      }
+      .screen { overflow: visible; height: auto; }
+      .screen-inner {
+        flex-direction: column;
+        justify-content: center;
+        gap: 32px;
+        padding-top: 88px;
+        padding-bottom: 88px;
+      }
+      .screen .layout-col-left,
+      .screen .layout-col-right { width: 100%; }
+      .screen .layout-col-center { display: none; }
+      .screen .col-pad-r { padding-right: 0; }
+      .screen .col-pad-l { padding-left: 0; }
+      .num-ghost { font-size: clamp(6rem, 26vw, 12rem); }
+      .ghost-type { font-size: 30vw; }
+    }
+  </style>
+</head>
+<body>
+<div id="page-root" class="relative w-full">
+<!-- Grain Overlay (Topmost Layer) -->
+  <div class="grain">
+    <svg width="100%" height="100%">
+      <filter id="noise">
+        <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch"/>
+      </filter>
+      <rect width="100%" height="100%" filter="url(#noise)"/>
+    </svg>
+  </div>
+
+  <div class="bg-white w-full max-w-[1440px] mx-auto overflow-hidden relative">
+
+    <!-- SCREEN 1: TITLE -->
+    <section class="screen">
+      <!-- BG Grid & Ghost Type -->
+      <div class="absolute inset-0 tech-grid z-0 opacity-80 pointer-events-none"></div>
+      <div class="absolute top-[-5%] left-[-10%] ghost-type z-0 transform rotate-[-5deg]">AI SYS</div>
+      <div class="absolute bottom-[5%] right-[-5%] ghost-type z-0 transform rotate-[3deg]">BRASIL</div>
+
+      <!-- Diagonal Bands -->
+      <div class="absolute top-[10%] left-[-10%] w-[120%] h-[120px] diag-band z-0"></div>
+      <div class="absolute bottom-[20%] left-[-10%] w-[120%] h-[200px] diag-band z-0"></div>
+
+      <!-- Accent Marks -->
+      <svg class="absolute top-[15%] right-[15%] w-8 h-8 text-acid-green z-0" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 0L14.59 9.41L24 12L14.59 14.59L12 24L9.41 14.59L0 12L9.41 9.41L12 0Z" />
+      </svg>
+      <svg class="absolute bottom-[30%] left-[25%] w-4 h-4 text-black z-0" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M11 11V0H13V11H24V13H13V24H11V13H0V11H11Z" />
+      </svg>
+      <div class="absolute top-[40%] right-[10%] w-3 h-3 bg-acid-green z-0"></div>
+
+      <!-- Layout 3 Columns -->
+      <div class="screen-inner">
+
+        <!-- Left Column -->
+        <div class="layout-col-left col-mid col-pad-r">
+          <span class="bg-black text-white px-4 py-2 rounded-full text-sm font-bold uppercase tracking-wider inline-block self-start mb-8">
+            Коммерческое предложение
+          </span>
+          <h1 class="title-1 text-black mb-8">
+            Комплексная AI-автоматизация<br/>для запусков на рынок
+            <span class="relative inline-block mt-2">
+              <span class="relative z-10">Бразилии</span>
+              <span class="absolute bottom-2 left-[-2%] w-[104%] h-2/5 bg-acid-green rounded-md -z-10"></span>
+            </span>
+          </h1>
+          <p class="text-[rgba(10,10,10,0.55)] text-lg font-medium">
+            Четыре блока работ под один запуск. Каждый блок можно взять отдельно.
+          </p>
+        </div>
+
+        <!-- Center Column (место под маскота) -->
+        <div class="layout-col-center"></div>
+
+        <!-- Right Column -->
+        <div class="layout-col-right"></div>
+
+      </div>
+    </section>
+
+    <!-- SCREEN 2: BLOCK 01 -->
+    <section class="screen bg-white">
+      <div class="absolute inset-0 tech-grid z-0 opacity-60 pointer-events-none"></div>
+      <div class="absolute top-[40%] left-[-10%] w-[120%] h-[160px] diag-band z-0"></div>
+      <div class="absolute top-0 right-0 w-64 h-64 dot-grid z-0 opacity-50"></div>
+
+      <div class="screen-inner">
+        <!-- Left Column: Card -->
+        <div class="layout-col-left col-mid col-pad-r">
+          <div class="bg-white rounded-[2rem] border border-[rgba(10,10,10,0.06)] card-shadow p-[36px] flex flex-col relative w-full max-w-[460px] mx-auto">
+            <img src="assets/img/obj-1-manager.webp" alt="AI Manager" width="1200" height="1200" loading="lazy" decoding="async" class="h-[150px] w-auto object-contain self-start mb-6 drop-shadow-xl">
+            <div class="flex items-center gap-3 mb-4">
+              <span class="bg-acid-green text-black px-3 py-1 rounded-full text-xs font-bold uppercase">Блок 01</span>
+            </div>
+            <h3 class="text-[26px] font-extrabold tracking-tight-custom leading-tight-custom mb-3">
+              AI-менеджер, сквозная аналитика и сопровождение
+            </h3>
+            <p class="text-[rgba(10,10,10,0.55)] text-[15px] font-medium mb-6 flex-grow">
+              До конца запуска технический специалист 24/7 на связи: ответы, рассылки, доработка функционала.
+            </p>
+            <hr class="border-[rgba(10,10,10,0.06)] mb-6">
+            <div class="price text-[46px] font-black tracking-tight-custom leading-none mb-1">
+              150 000 ₽
+            </div>
+            <div class="text-[rgba(10,10,10,0.4)] text-sm font-semibold uppercase tracking-wider">
+              За весь период запуска
+            </div>
+          </div>
+        </div>
+
+        <!-- Center Column (место под маскота) -->
+        <div class="layout-col-center"></div>
+
+        <!-- Right Column: Number -->
+        <div class="layout-col-right col-num">
+          <div class="num-ghost">01</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCREEN 3: BLOCK 02 -->
+    <section class="screen bg-white">
+      <div class="absolute inset-0 tech-grid z-0 opacity-60 pointer-events-none"></div>
+      <div class="absolute bottom-[20%] left-[-10%] w-[120%] h-[160px] diag-band z-0"></div>
+      <div class="absolute bottom-0 left-0 w-64 h-64 dot-grid z-0 opacity-50"></div>
+
+      <div class="screen-inner">
+        <!-- Left Column: Number -->
+        <div class="layout-col-left col-num">
+          <div class="num-ghost">02</div>
+        </div>
+
+        <!-- Center Column (место под маскота) -->
+        <div class="layout-col-center"></div>
+
+        <!-- Right Column: Card -->
+        <div class="layout-col-right col-mid col-pad-l">
+          <div class="bg-white rounded-[2rem] border border-[rgba(10,10,10,0.06)] card-shadow p-[36px] flex flex-col relative w-full max-w-[460px] mx-auto">
+            <img src="assets/img/obj-2-design.webp" alt="AI Design" width="1200" height="1200" loading="lazy" decoding="async" class="h-[150px] w-auto object-contain self-start mb-6 drop-shadow-xl">
+            <div class="flex items-center gap-3 mb-4">
+              <span class="bg-acid-green text-black px-3 py-1 rounded-full text-xs font-bold uppercase">Блок 02</span>
+            </div>
+            <h3 class="text-[26px] font-extrabold tracking-tight-custom leading-tight-custom mb-3">
+              AI-дизайн и AI-монтаж
+            </h3>
+            <p class="text-[rgba(10,10,10,0.55)] text-[15px] font-medium mb-6 flex-grow">
+              Единый фирменный стиль школы для всех баннеров и презентаций. ИИ делает дизайн день в день на уровне профессионального дизайнера.
+            </p>
+            <hr class="border-[rgba(10,10,10,0.06)] mb-6">
+            <div class="price text-[46px] font-black tracking-tight-custom leading-none mb-1">
+              40 000 ₽
+            </div>
+            <div class="text-[rgba(10,10,10,0.4)] text-sm font-semibold uppercase tracking-wider">
+              На весь запуск
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCREEN 4: BLOCK 03 -->
+    <section class="screen bg-white">
+      <div class="absolute inset-0 tech-grid z-0 opacity-60 pointer-events-none"></div>
+      <div class="absolute top-[10%] right-[-10%] w-[120%] h-[160px] diag-band z-0"></div>
+
+      <div class="screen-inner">
+        <!-- Left Column: Card -->
+        <div class="layout-col-left col-mid col-pad-r">
+          <div class="bg-white rounded-[2rem] border border-[rgba(10,10,10,0.06)] card-shadow p-[36px] flex flex-col relative w-full max-w-[460px] mx-auto">
+            <img src="assets/img/obj-3-video.webp" alt="AI Video" width="1200" height="1200" loading="lazy" decoding="async" class="h-[150px] w-auto object-contain self-start mb-6 drop-shadow-xl">
+            <div class="flex items-center gap-3 mb-4">
+              <span class="bg-acid-green text-black px-3 py-1 rounded-full text-xs font-bold uppercase">Блок 03</span>
+            </div>
+            <h3 class="text-[26px] font-extrabold tracking-tight-custom leading-tight-custom mb-3">
+              AI-видео контент
+            </h3>
+            <p class="text-[rgba(10,10,10,0.55)] text-[15px] font-medium mb-6 flex-grow">
+              5 разных интро и 5 разных аутро на все уроки обучения. Отдельно — ИИ-аватары для блогера или эксперта, 5 000 ₽ за видео.
+            </p>
+            <hr class="border-[rgba(10,10,10,0.06)] mb-6">
+            <div class="price text-[46px] font-black tracking-tight-custom leading-none mb-1">
+              25 000 ₽
+            </div>
+            <div class="text-[rgba(10,10,10,0.4)] text-sm font-semibold uppercase tracking-wider">
+              За 10 видео
+            </div>
+          </div>
+        </div>
+
+        <!-- Center Column (место под маскота) -->
+        <div class="layout-col-center"></div>
+
+        <!-- Right Column: Number -->
+        <div class="layout-col-right col-num">
+          <div class="num-ghost">03</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCREEN 5: BLOCK 04 -->
+    <section class="screen bg-white">
+      <div class="absolute inset-0 tech-grid z-0 opacity-60 pointer-events-none"></div>
+      <div class="absolute top-[40%] right-[-10%] w-[120%] h-[160px] diag-band z-0"></div>
+
+      <div class="screen-inner">
+        <!-- Left Column: Number -->
+        <div class="layout-col-left col-num">
+          <div class="num-ghost">04</div>
+        </div>
+
+        <!-- Center Column (место под маскота) -->
+        <div class="layout-col-center"></div>
+
+        <!-- Right Column: Card -->
+        <div class="layout-col-right col-mid col-pad-l">
+          <div class="bg-white rounded-[2rem] border border-[rgba(10,10,10,0.06)] card-shadow p-[36px] flex flex-col relative w-full max-w-[460px] mx-auto">
+            <img src="assets/img/obj-4-site.webp" alt="AI Site" width="1200" height="1200" loading="lazy" decoding="async" class="h-[150px] w-auto object-contain self-start mb-6 drop-shadow-xl">
+            <div class="flex items-center gap-3 mb-4">
+              <span class="bg-acid-green text-black px-3 py-1 rounded-full text-xs font-bold uppercase">Блок 04</span>
+            </div>
+            <h3 class="text-[26px] font-extrabold tracking-tight-custom leading-tight-custom mb-3">
+              Сайт с анимациями уровня Apple
+            </h3>
+            <p class="text-[rgba(10,10,10,0.55)] text-[15px] font-medium mb-6 flex-grow">
+              Готовый сайт по вашему ТЗ, оптимизирован под любые устройства и быстро открывается.
+            </p>
+            <hr class="border-[rgba(10,10,10,0.06)] mb-6">
+            <div class="price text-[46px] font-black tracking-tight-custom leading-none mb-1">
+              30 000 ₽
+            </div>
+            <div class="text-[rgba(10,10,10,0.4)] text-sm font-semibold uppercase tracking-wider">
+              Сайт под ключ
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SCREEN 6: CASES -->
+    <section class="screen screen--stack bg-white">
+      <!-- Background Layers -->
+      <div class="absolute inset-0 tech-grid z-0 opacity-60 pointer-events-none"></div>
+      <div class="absolute top-[60%] right-[-10%] ghost-type z-0 transform rotate-[6deg]">CASES</div>
+      <div class="absolute bottom-[10%] left-[-15%] w-[130%] h-[180px] diag-band z-0"></div>
+
+      <svg class="absolute top-[10%] left-[80%] w-10 h-10 text-acid-green z-0" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 0L14.59 9.41L24 12L14.59 14.59L12 24L9.41 14.59L0 12L9.41 9.41L12 0Z" />
+      </svg>
+      <svg class="absolute bottom-[15%] right-[10%] w-5 h-5 text-black z-0" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M11 11V0H13V11H24V13H13V24H11V13H0V11H11Z" />
+      </svg>
+      <div class="absolute top-[50%] left-[5%] w-4 h-4 bg-acid-green z-0"></div>
+
+      <!-- Header -->
+      <div class="z-20 mb-12 flex flex-col items-start w-full max-w-6xl mx-auto">
+        <span class="bg-black text-white px-4 py-2 rounded-full text-sm font-bold uppercase tracking-wider mb-6 inline-block">
+          КЕЙСЫ
+        </span>
+        <h2 class="text-[clamp(2rem,3.5vw,4rem)] font-black tracking-tight-custom leading-tight-custom mb-4">
+          Что уже работает
+        </h2>
+        <p class="text-[rgba(10,10,10,0.55)] text-lg font-medium">
+          Не первый проект — системы, которые уже собраны и крутятся в бою.
+        </p>
+      </div>
+
+      <!-- 2x2 Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-8 z-20 w-full max-w-6xl mx-auto">
+
+        <!-- Card 1 -->
+        <div class="bg-white rounded-[2rem] border border-[rgba(10,10,10,0.06)] card-shadow p-[28px] flex flex-col">
+          <div class="w-full h-[190px] rounded-[1.25rem] overflow-hidden mb-6 bg-gray-50">
+            <img src="assets/img/case-1-bot.webp" alt="10+ ИИ-ботов" width="798" height="734" loading="lazy" decoding="async" class="w-full h-full object-cover">
+          </div>
+          <h3 class="text-[26px] font-extrabold tracking-tight-custom leading-tight-custom mb-3">
+            10+ ИИ-ботов
+          </h3>
+          <p class="text-[rgba(10,10,10,0.55)] text-[15px] font-medium flex-grow">
+            Боты продаж и поддержки для инфобиза и не только.
+          </p>
+        </div>
+
+        <!-- Card 2 -->
+        <div class="bg-white rounded-[2rem] border border-[rgba(10,10,10,0.06)] card-shadow p-[28px] flex flex-col">
+          <div class="w-full h-[190px] rounded-[1.25rem] overflow-hidden mb-6 bg-gray-50">
+            <img src="assets/img/case-2-lms.webp" alt="LMS для обучения" width="1600" height="670" loading="lazy" decoding="async" class="w-full h-full object-cover object-top">
+          </div>
+          <h3 class="text-[26px] font-extrabold tracking-tight-custom leading-tight-custom mb-3">
+            LMS для обучения
+          </h3>
+          <p class="text-[rgba(10,10,10,0.55)] text-[15px] font-medium flex-grow">
+            Своя система выдачи уроков — аналог GetCourse.
+          </p>
+        </div>
+
+        <!-- Card 3 -->
+        <div class="bg-white rounded-[2rem] border border-[rgba(10,10,10,0.06)] card-shadow p-[28px] flex flex-col">
+          <div class="w-full h-[190px] rounded-[1.25rem] overflow-hidden mb-6 bg-gray-50">
+            <img src="assets/img/case-3-site.webp" alt="Сайты" width="1600" height="1118" loading="lazy" decoding="async" class="w-full h-full object-cover object-left">
+          </div>
+          <h3 class="text-[26px] font-extrabold tracking-tight-custom leading-tight-custom mb-3">
+            Сайты
+          </h3>
+          <p class="text-[rgba(10,10,10,0.55)] text-[15px] font-medium flex-grow">
+            Лендинги и многостраничники под ключ.
+          </p>
+        </div>
+
+        <!-- Card 4 -->
+        <div class="bg-white rounded-[2rem] border border-[rgba(10,10,10,0.06)] card-shadow p-[28px] flex flex-col">
+          <div class="w-full h-[190px] rounded-[1.25rem] overflow-hidden mb-6 bg-gray-50">
+            <img src="assets/img/case-4-analytics.webp" alt="Сквозная аналитика" width="1600" height="904" loading="lazy" decoding="async" class="w-full h-full object-cover object-left">
+          </div>
+          <h3 class="text-[26px] font-extrabold tracking-tight-custom leading-tight-custom mb-3">
+            Сквозная аналитика
+          </h3>
+          <p class="text-[rgba(10,10,10,0.55)] text-[15px] font-medium flex-grow">
+            Дашборды по выручке, заказам и каналам в реальном времени.
+          </p>
+        </div>
+
+      </div>
+    </section>
+
+  </div>
+
+  <!-- МАСКОТ: прозрачная секвенция кадров, перематываемая скроллом -->
+  <div id="mascot-stage" aria-hidden="true">
+    <div class="mascot-glow"></div>
+    <img id="mascot-poster" src="assets/poster.webp" alt="" decoding="async" fetchpriority="high">
+    <canvas id="mascot-canvas"></canvas>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var FRAMES = 121;                 // f000..f120, каждый второй кадр исходника
+  var CONCURRENCY = 4;              // параллельная загрузка
+  var SMOOTH = 0.2;                 // current += (target - current) * SMOOTH
+  var DPR_CAP = 2;
+
+  var stage  = document.getElementById('mascot-stage');
+  var canvas = document.getElementById('mascot-canvas');
+  var poster = document.getElementById('mascot-poster');
+  var sections = Array.prototype.slice.call(document.querySelectorAll('section'));
+
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var imgs   = new Array(FRAMES);
+  var state  = new Uint8Array(FRAMES);  // 0 — не начат, 1 — грузится, 2 — готов, 3 — ошибка
+  var inflight = 0;
+  var loadedCount = 0;
+
+  var target = 0, current = 0, drawn = -1, raf = 0;
+  var ctx = null;
+
+  function src(i) {
+    return 'assets/frames/f' + (i < 10 ? '00' : i < 100 ? '0' : '') + i + '.webp';
+  }
+
+  /* ---------- размеры canvas с учётом devicePixelRatio ---------- */
+  function sizeCanvas() {
+    var r = stage.getBoundingClientRect();
+    var dpr = Math.min(DPR_CAP, window.devicePixelRatio || 1);
+    var w = Math.max(1, Math.round(r.width * dpr));
+    var h = Math.max(1, Math.round(r.height * dpr));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      drawn = -1;                    // буфер обнулён — перерисовать
+    }
+    ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+  }
+
+  /* ---------- ближайший УЖЕ загруженный кадр ---------- */
+  function nearestLoaded(i) {
+    if (state[i] === 2) return i;
+    for (var d = 1; d < FRAMES; d++) {
+      if (i - d >= 0 && state[i - d] === 2) return i - d;
+      if (i + d < FRAMES && state[i + d] === 2) return i + d;
+    }
+    return -1;
+  }
+
+  function drawFrame() {
+    if (reduced || !ctx) return;
+    var want = Math.max(0, Math.min(FRAMES - 1, Math.round(current)));
+    var use = nearestLoaded(want);
+    if (use < 0 || use === drawn) return;      // рисуем только при смене индекса
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(imgs[use], 0, 0, canvas.width, canvas.height);
+    drawn = use;
+  }
+
+  /* ---------- загрузка по близости к текущему индексу, параллелизм 4 ---------- */
+  function nextToLoad() {
+    var c = Math.max(0, Math.min(FRAMES - 1, Math.round(current)));
+    for (var d = 0; d < FRAMES; d++) {
+      if (c - d >= 0 && state[c - d] === 0) return c - d;
+      if (c + d < FRAMES && state[c + d] === 0) return c + d;
+    }
+    return -1;
+  }
+
+  function pump() {
+    while (inflight < CONCURRENCY) {
+      var i = nextToLoad();
+      if (i < 0) return;
+      state[i] = 1;
+      inflight++;
+      (function (n) {
+        var im = new Image();
+        im.decoding = 'async';
+        im.onload = function () {
+          imgs[n] = im; state[n] = 2; loadedCount++; inflight--;
+          drawFrame(); pump();
+        };
+        im.onerror = function () {
+          state[n] = 3; inflight--; pump();
+        };
+        im.src = src(n);
+      })(i);
+    }
+  }
+
+  /* ---------- прогресс: от верха страницы до конца 5-й секции ---------- */
+  function progress() {
+    var s5 = sections[4];
+    if (!s5) return 0;
+    var end = s5.getBoundingClientRect().bottom + window.pageYOffset - window.innerHeight;
+    if (end <= 0) return 0;
+    var p = window.pageYOffset / end;
+    return p < 0 ? 0 : p > 1 ? 1 : p;
+  }
+
+  /* ---------- затухание слоя на 6-й секции (кейсы) ---------- */
+  function fade() {
+    var s6 = sections[5];
+    if (!s6) return 1;
+    var top = s6.getBoundingClientRect().top;
+    var v = 1 - (window.innerHeight - top) / (window.innerHeight * 0.6);
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+  }
+
+  /* ---------- единственный rAF-цикл ---------- */
+  function tick() {
+    raf = 0;
+    target = progress() * (FRAMES - 1);
+    var diff = target - current;
+    if (Math.abs(diff) < 0.01) current = target;
+    else current += diff * SMOOTH;
+
+    stage.style.setProperty('--mascot-fade', fade().toFixed(3));
+    drawFrame();
+    pump();
+
+    if (Math.abs(target - current) >= 0.01) kick();
+  }
+
+  function kick() {
+    if (!raf) raf = requestAnimationFrame(tick);
+  }
+
+  function onResize() {
+    sizeCanvas();
+    drawFrame();
+    kick();
+  }
+
+  function init() {
+    sizeCanvas();
+    stage.style.setProperty('--mascot-fade', fade().toFixed(3));
+    if (!reduced) pump();            // старт не ждёт событий медиа
+    target = current = progress() * (FRAMES - 1);
+    drawFrame();
+    kick();
+    window.addEventListener('scroll', kick, { passive: true });
+    window.addEventListener('resize', onResize);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  /* ---------- телеметрия для замеров приёмки ---------- */
+  window.__mascot = {
+    frames: FRAMES,
+    reduced: reduced,
+    get index()   { return Math.round(current); },
+    get target()  { return target; },
+    get current() { return current; },
+    get drawn()   { return drawn; },
+    get p()       { return progress(); },
+    get fade()    { return fade(); },
+    get loaded()  { return loadedCount; },
+    get errors()  { var e = 0; for (var i = 0; i < FRAMES; i++) if (state[i] === 3) e++; return e; },
+    /* Прогон того же tick() вручную: нужен для замеров, когда вкладка скрыта
+       и браузер не вызывает requestAnimationFrame. */
+    settle: function (maxIter) {
+      var i = 0, lim = maxIter || 200;
+      do { tick(); i++; } while (Math.abs(target - current) >= 0.01 && i < lim);
+      return i;
+    },
+    posterOk: function () {
+      return poster.naturalWidth > 0 &&
+             getComputedStyle(poster).opacity === '1' &&
+             document.contains(poster);
+    }
+  };
+})();
+</script>
+</body></html>
