@@ -43,6 +43,13 @@ PNG_DIR = ROOT / ".build" / "png"
 OUT_DIR = ROOT / "assets" / "frames"
 POSTER = ROOT / "assets" / "poster.webp"
 
+# Лёгкий набор для мобильного (<= 1023px): каждый второй кадр десктопного
+# набора, меньшая высота, ниже качество. Матирование то же самое — оно
+# считается на полном разрешении, уменьшение идёт последним шагом.
+OUT_DIR_M = ROOT / "assets" / "frames-m"
+POSTER_M = ROOT / "assets" / "poster-m.webp"
+FRAME_H_M = 640        # высота мобильного кадра, ширина по пропорции -> 480
+
 FRAME_H = 960          # высота кадра на выходе, ширина по пропорции 834/1112 -> 720
 BOTTOM_FADE = 0.06     # доля высоты, по которой альфа гаснет к нулю
 LR_FADE = 0.07         # доля ширины: затухание по левому и правому краям
@@ -341,12 +348,84 @@ def verify_outputs():
               f"({Image.open(POSTER).size[0]}x{Image.open(POSTER).size[1]})")
 
 
+def downscale(rgb: np.ndarray, alpha: np.ndarray, target_h: int):
+    """Уменьшение RGBA с ПРЕДУМНОЖЕНИЕМ альфы.
+
+    Без предумножения LANCZOS подмешивает в контур цвет прозрачных пикселей
+    (у нас это почти белый фон студии) и на волосах снова появляется кайма.
+    Полностью прозрачные пиксели заливаем цветом фона — lossy WebP хранит RGB
+    и в нулевой альфе, чёрный там дал бы тёмный ореол на полупрозрачном крае.
+    """
+    h, w = alpha.shape
+    tw = int(round(w * target_h / h))
+    a_small = np.asarray(
+        Image.fromarray(np.clip(alpha * 255, 0, 255).astype(np.uint8), "L")
+             .resize((tw, target_h), Image.LANCZOS)
+    ).astype(np.float32) / 255.0
+    prem = np.clip(rgb * alpha[..., None], 0, 255).astype(np.uint8)
+    p_small = np.asarray(
+        Image.fromarray(prem, "RGB").resize((tw, target_h), Image.LANCZOS)
+    ).astype(np.float32)
+    out = np.empty_like(p_small)
+    m = a_small > 0.004
+    out[m] = np.clip(p_small[m] / a_small[m][:, None], 0, 255)
+    out[~m] = BG
+    return out, a_small
+
+
+def build_mobile(files: list[Path], quality: int, budget: float) -> None:
+    """Режим --mobile: каждый второй кадр -> assets/frames-m + poster-m.webp."""
+    sel = files[::2]
+    if OUT_DIR_M.exists():
+        for f in OUT_DIR_M.glob("*.webp"):
+            f.unlink()
+    OUT_DIR_M.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n[mobile] {len(sel)} кадров из {len(files)} (каждый второй), "
+          f"высота {FRAME_H_M}, quality={quality}")
+    total = 0
+    for i, p in enumerate(sel):
+        rgb = np.asarray(Image.open(p).convert("RGB")).astype(np.float64)
+        out, alpha, _R, _wide = matte(rgb)
+        out, alpha = downscale(out, alpha, FRAME_H_M)
+        rgba = np.dstack([out, alpha * 255]).astype(np.uint8)
+        img = Image.fromarray(rgba, "RGBA")
+        dst = OUT_DIR_M / f"f{i:03d}.webp"
+        img.save(dst, "WEBP", quality=quality, method=6)
+        total += dst.stat().st_size
+        if i == 0:
+            img.save(POSTER_M, "WEBP", quality=max(quality, 82), method=6)
+        if i % 20 == 0:
+            print(f"    ...{i + 1}/{len(sel)}", flush=True)
+
+    verify_frame(OUT_DIR_M / "f000.webp", "мобильный старт, общий план")
+    verify_frame(OUT_DIR_M / f"f{len(sel)-1:03d}.webp", "мобильный финал, крупный план")
+    verify_edges(OUT_DIR_M / "f000.webp")
+    verify_edges(OUT_DIR_M / f"f{min(45, len(sel)-1):03d}.webp")
+
+    mb = total / 1024 / 1024
+    ps = POSTER_M.stat().st_size / 1024
+    print(f"\n[итог-m] кадров: {len(sel)}  ({OUT_DIR_M.relative_to(ROOT)}/f000..f{len(sel)-1:03d}.webp)")
+    print(f"[итог-m] размер: {mb:.2f} MB (бюджет {budget} MB) — "
+          f"{'OK' if mb <= budget else 'ПРЕВЫШЕН, взять --mobile-quality 70, затем FRAME_H_M 560'}")
+    print(f"[итог-m] poster-m.webp: {ps:.1f} KB "
+          f"({Image.open(POSTER_M).size[0]}x{Image.open(POSTER_M).size[1]}) — "
+          f"{'OK' if ps <= 60 else 'ПРЕВЫШЕН лимит 60 KB'}")
+    print(f"[итог-m] средний кадр: {total / len(sel) / 1024:.1f} KB")
+    if mb > budget:
+        sys.exit(1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quality", type=int, default=78)
     ap.add_argument("--step", type=int, default=2, help="каждый N-й кадр исходника")
     ap.add_argument("--budget", type=float, default=8.0, help="бюджет кадров, MB")
     ap.add_argument("--verify", action="store_true", help="только проверить готовые кадры")
+    ap.add_argument("--mobile", action="store_true",
+                    help="собрать лёгкий набор assets/frames-m (каждый второй кадр)")
+    ap.add_argument("--mobile-quality", type=int, default=74)
+    ap.add_argument("--mobile-budget", type=float, default=2.5, help="бюджет frames-m, MB")
     args = ap.parse_args()
 
     if args.verify:
@@ -356,6 +435,10 @@ def main():
     files = extract_png(args.step)
     if not files:
         sys.exit("нет PNG кадров")
+
+    if args.mobile:
+        build_mobile(files, args.mobile_quality, args.mobile_budget)
+        return
 
     if OUT_DIR.exists():
         for f in OUT_DIR.glob("*.webp"):

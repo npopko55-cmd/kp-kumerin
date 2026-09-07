@@ -3,7 +3,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
   <title>КП — AI-автоматизация</title>
-  <link rel="preload" as="image" href="assets/poster.webp">
+  <link rel="preload" as="image" href="assets/poster.webp" media="(min-width: 1024px)">
+  <link rel="preload" as="image" href="assets/poster-m.webp" media="(max-width: 1023px)">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;800;900&display=swap');
@@ -279,34 +280,90 @@
       #mascot-stage { transition: none; }
     }
 
-    /* ---------- <= 1023px: одна колонка, маскот уходит на задний план ---------- */
+    /* ---------- <= 1023px: героиня в прилипшей верхней полосе ---------- */
     @media (max-width: 1023px) {
-      #mascot-stage {
-        z-index: 0;
-        opacity: calc(var(--mascot-fade, 1) * .22);
-        width: min(70vw, calc(60dvh * 834 / 1112));
+      :root { --m-band: 42dvh; }
+
+      /* Полоса: фиксирована сверху, срез торса растворяется маской снизу.
+         overflow: hidden именно на обёртке — стадию масштабирует JS, и
+         клип на самой стадии рос бы вместе с ней. */
+      #mascot-band {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: var(--m-band);
+        overflow: hidden;
+        z-index: 20;
+        pointer-events: none;
+        -webkit-mask-image: linear-gradient(#000 70%, transparent 100%);
+                mask-image: linear-gradient(#000 70%, transparent 100%);
       }
+      #mascot-stage {
+        position: absolute;
+        top: 0;
+        bottom: auto;
+        left: 50%;
+        width: calc(var(--m-band) * 834 / 1112);   /* высота = ровно полоса */
+        max-height: none;
+        /* верх по центру: голова остаётся в полосе, тело уходит под маску */
+        transform-origin: 50% 0%;
+        opacity: var(--mascot-fade, 1);
+        z-index: auto;
+      }
+      .mascot-glow {
+        bottom: auto;
+        top: -6%;                 /* центр круга ~0.28 высоты кадра — за головой */
+        width: 90%;
+      }
+
       /* overflow: clip оставляем и на мобильном — иначе широкие
          блоки дают shrink-to-fit и горизонтальный скролл. */
-      .screen--hero { min-height: 100dvh; }
-      .hero-sticky { position: static; height: auto; min-height: 100dvh; }
+
+      /* Титул: пока листается секция, ролик идёт 0 -> L. Прилипшая обёртка
+         начинается ровно под полосой, поэтому текст с ней не пересекается. */
+      .screen--hero { min-height: 170dvh; }
+      .hero-sticky {
+        position: sticky;
+        top: var(--m-band);
+        height: calc(100dvh - var(--m-band));
+        min-height: 0;
+      }
+
       .screen-inner {
         flex-direction: column;
         justify-content: center;
-        gap: 32px;
-        padding-top: 88px;
-        padding-bottom: 88px;
+        gap: 28px;
+        padding-top: calc(var(--m-band) + 16px);   /* контент — под полосой */
+        padding-bottom: 48px;
       }
+      .screen--hero .screen-inner { padding-top: 16px; padding-bottom: 16px; }
+      .screen--stack { padding-top: calc(var(--m-band) + 16px); padding-bottom: 64px; }
+
       .screen .layout-col-left,
       .screen .layout-col-right { width: 100%; }
       .screen.screen--hero .layout-col-left { width: 100%; }
       .screen .layout-col-center { display: none; }
       .screen .col-pad-r { padding-right: 0; }
       .screen .col-pad-l { padding-left: 0; }
+
+      /* Услуги: карточки во всю ширину, стопкой по две в секции */
+      .screen--svc .screen-inner { padding-left: 0; padding-right: 0; }
       .screen .svc-side { width: 100%; align-items: stretch; }
       .screen .svc-gap { display: none; }
-      .svc-card { max-width: 560px; margin-inline: auto; }
+      .svc-card {
+        width: calc(100% - 32px);
+        max-width: none;
+        margin-inline: auto;
+        padding: 20px;
+      }
+      .svc-obj { width: 96px; height: 96px; margin-bottom: 12px; }
+      .svc-h { font-size: 21px; }
+      .svc-price { font-size: 34px; }
 
+      /* Кейсы: одна колонка. Специфичность 0,3,0 — перебивает md:grid-cols-2
+         из Tailwind CDN, чей <style> вставляется в head позже нашего. */
+      .screen--stack .grid.grid-cols-1 { grid-template-columns: minmax(0, 1fr); }
     }
   </style>
 </head>
@@ -493,11 +550,19 @@
 
   </div>
 
-  <!-- МАСКОТ: прозрачная секвенция кадров, перематываемая скроллом -->
-  <div id="mascot-stage" aria-hidden="true">
-    <div class="mascot-glow"></div>
-    <img id="mascot-poster" src="assets/poster.webp" alt="" decoding="async" fetchpriority="high">
-    <canvas id="mascot-canvas"></canvas>
+  <!-- МАСКОТ: прозрачная секвенция кадров, перематываемая скроллом.
+       #mascot-band — на десктопе пустая обёртка без собственной геометрии
+       (единственный ребёнок position: fixed), на мобильном — прилипшая
+       верхняя полоса с overflow: hidden и маской-градиентом снизу. -->
+  <div id="mascot-band" aria-hidden="true">
+    <div id="mascot-stage">
+      <div class="mascot-glow"></div>
+      <picture>
+        <source media="(max-width: 1023px)" srcset="assets/poster-m.webp">
+        <img id="mascot-poster" src="assets/poster.webp" alt="" decoding="async" fetchpriority="high">
+      </picture>
+      <canvas id="mascot-canvas"></canvas>
+    </div>
   </div>
 </div>
 
@@ -505,18 +570,27 @@
 (function () {
   'use strict';
 
-  var FRAMES = 121;                 // f000..f120, каждый второй кадр исходника
+  /* Набор кадров выбирается ОДИН РАЗ при инициализации: на мобильном —
+     лёгкий assets/frames-m (61 кадр, высота 640). При повороте экрана набор
+     не переключаем: перезагрузка секвенции дороже лишнего пикселя. */
+  var MOBILE = window.matchMedia('(max-width: 1023px)').matches;
+
+  var FRAMES = MOBILE ? 61 : 121;   // f000..fNNN, каждый второй кадр исходника
+  var FRAME_DIR = MOBILE ? 'assets/frames-m/' : 'assets/frames/';
 
   /* Кадры-опоры найдены по доле непрозрачных пикселей (alpha > 200):
      базовая линия кадров 0..10 = 57.40 %, плато крупного плана 100..120 = 79.37 %.
      L: первый из трёх подряд кадров с долей выше базовой на 2 п.п. (59.40 %) —
         f045 = 60.43 %, стол уже улетел, в кадр входят бёдра: её начинает поднимать.
      M: первый устойчивый выход в плато 79.37 ± 1.5 п.п. — f054 = 79.21 %,
-        крупный план собран, глаза раскрыты, начинаются взгляды. */
-  var FRAME_LIFT_START = 45;        // L — начало подъёма
-  var FRAME_CLOSEUP    = 54;        // M — крупный план собран
+        крупный план собран, глаза раскрыты, начинаются взгляды.
+     Мобильный набор вдвое реже — опоры делятся на 2: 45 -> 22, 54 -> 27. */
+  var FRAME_LIFT_START = MOBILE ? 22 : 45;        // L — начало подъёма
+  var FRAME_CLOSEUP    = MOBILE ? 27 : 54;        // M — крупный план собран
 
-  var SCALE_MAX = 1.16;             // S — дублирует --mascot-s в CSS
+  /* S на мобильном 1.10, а не 1.16: origin у полосы сверху, и при 1.16
+     лицо упирается в верхнюю кромку полосы. */
+  var SCALE_MAX = MOBILE ? 1.10 : 1.16;   // дублирует --mascot-s в CSS (десктоп)
   var CONCURRENCY = 4;              // параллельная загрузка
   var SMOOTH = 0.2;                 // current += (target - current) * SMOOTH
   var DPR_CAP = 2;
@@ -540,7 +614,7 @@
   var ctx = null;
 
   function src(i) {
-    return 'assets/frames/f' + (i < 10 ? '00' : i < 100 ? '0' : '') + i + '.webp';
+    return FRAME_DIR + 'f' + (i < 10 ? '00' : i < 100 ? '0' : '') + i + '.webp';
   }
 
   /* ---------- размеры canvas с учётом devicePixelRatio ----------
@@ -729,6 +803,8 @@
   /* ---------- телеметрия для замеров приёмки ---------- */
   window.__mascot = {
     frames: FRAMES,
+    mobile: MOBILE,
+    dir: FRAME_DIR,
     reduced: reduced,
     L: L,
     M: M,
