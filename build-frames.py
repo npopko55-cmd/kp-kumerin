@@ -11,7 +11,12 @@ build-frames.py — сборка прозрачной секвенции кад�
      поэтому белки глаз, зубы и белые кроссовки остаются непрозрачными.
   3. Мягкая альфа в узкой полосе вокруг фоновой области + деконтаминация
      цвета — убирает белую кайму на волосах.
-  4. Затухание альфы по нижним BOTTOM_FADE (6%) высоты кадра.
+  4. Затухание альфы по краям кадра — прячет прямые срезы исходника:
+     нижние BOTTOM_FADE (6%), левый и правый по LR_FADE (7%) ширины,
+     верхний по TOP_FADE (5%) высоты. Затухание работает только там,
+     где непрозрачные пиксели реально доходят до края (ворота по строкам
+     для боков и по колонкам для верха), иначе на общих планах гасла бы
+     верхушка шапки, которая до края не достаёт.
   5. Пишет assets/frames/fNNN.webp (lossy WebP с альфой) и assets/poster.webp.
   6. Печатает проверку альфы числами и итоговый размер.
 
@@ -40,6 +45,14 @@ POSTER = ROOT / "assets" / "poster.webp"
 
 FRAME_H = 960          # высота кадра на выходе, ширина по пропорции 834/1112 -> 720
 BOTTOM_FADE = 0.06     # доля высоты, по которой альфа гаснет к нулю
+LR_FADE = 0.07         # доля ширины: затухание по левому и правому краям
+TOP_FADE = 0.05        # доля высоты: затухание по верхнему краю
+
+# Ворота затухания: гасим край только там, где силуэт реально его достаёт.
+EDGE_TOUCH = 0.15      # alpha, выше которой считаем «пиксель дошёл до края»
+EDGE_PROBE = 3         # сколько пикселей от края щупаем
+EDGE_DILATE = 41       # расширение зоны действия ворот вдоль края, px
+EDGE_SIGMA = 9.0       # сглаживание ворот вдоль края, px (без него — ступеньки)
 
 # Фон студии — стабильный #fbfbfb на всех 241 кадрах (проверено по угловым
 # патчам 24x24: медиана (251,251,251) на каждом 10-м кадре без дрейфа).
@@ -95,6 +108,51 @@ def background_region(d: np.ndarray) -> np.ndarray:
     return background_region_from(d <= T_FLOOD)
 
 
+def _ramp(n: int) -> np.ndarray:
+    """Smoothstep 0 -> 1 по n пикселям от края внутрь.
+
+    Плавнее линейного: у внутренней границы полосы производная нулевая,
+    поэтому шов «полоса / непрозрачное тело» не читается тонкой линией.
+    """
+    t = (np.arange(n, dtype=np.float32) + 0.5) / n
+    return t * t * (3.0 - 2.0 * t)
+
+
+def _gate(touch: np.ndarray) -> np.ndarray:
+    """Ворота 0..1 вдоль края: 1 там, где силуэт доходит до края, 0 где пусто."""
+    g = ndimage.grey_dilation(touch.astype(np.float32), size=EDGE_DILATE)
+    g = ndimage.gaussian_filter1d(g, EDGE_SIGMA)
+    return np.clip(g, 0.0, 1.0)
+
+
+def edge_fade(alpha: np.ndarray) -> np.ndarray:
+    """Гасит альфу у левого/правого/верхнего/нижнего краёв кадра.
+
+    Пиксели за кадром не восстановить, поэтому прямой срез растворяем.
+    Множитель = 1 - gate * (1 - ramp): где ворота 0 (край пуст) — множитель 1,
+    и на общем плане верхушка шапки на y=20 остаётся целой.
+    """
+    h, w = alpha.shape
+    nx = int(round(w * LR_FADE))
+    ny = int(round(h * TOP_FADE))
+    nb = int(round(h * BOTTOM_FADE))
+    rx, ry = _ramp(nx), _ramp(ny)
+
+    gl = _gate(alpha[:, :EDGE_PROBE].max(axis=1) > EDGE_TOUCH)
+    alpha[:, :nx] *= 1.0 - gl[:, None] * (1.0 - rx[None, :])
+
+    gr = _gate(alpha[:, w - EDGE_PROBE:].max(axis=1) > EDGE_TOUCH)
+    alpha[:, w - nx:] *= 1.0 - gr[:, None] * (1.0 - rx[::-1][None, :])
+
+    gt = _gate(alpha[:EDGE_PROBE, :].max(axis=0) > EDGE_TOUCH)
+    alpha[:ny, :] *= 1.0 - gt[None, :] * (1.0 - ry[:, None])
+
+    # низ гасим всегда и линейно: там срез тела совпадает с нижней кромкой
+    # экрана, ворота не нужны, а линейный клин уже принят заказчиком в v1.
+    alpha[h - nb:] *= np.linspace(1.0, 0.0, nb, dtype=np.float32)[:, None]
+    return alpha
+
+
 def matte(rgb: np.ndarray):
     """RGB float -> (rgb с деконтаминацией, alpha 0..1, фоновая область, общий ли план)."""
     d = np.abs(rgb - BG).max(axis=2)
@@ -121,15 +179,16 @@ def matte(rgb: np.ndarray):
     alpha = ndimage.gaussian_filter(alpha, BLUR)
     alpha[R & (d <= T_HARD - 6)] = 0.0
 
-    # затухание по нижним 6% высоты — срез волос/тела растворяется
-    nb = int(round(h * BOTTOM_FADE))
-    alpha[h - nb:] *= np.linspace(1.0, 0.0, nb, dtype=np.float32)[:, None]
-
-    # деконтаминация цвета: C_fg = (C - (1-a)*BG) / a
+    # Деконтаминация цвета: C_fg = (C - (1-a)*BG) / a.
+    # Считается ДО искусственного затухания краёв — там альфа занижена
+    # намеренно, и деление на неё увело бы волосы в чёрный (тёмная кайма).
     out = rgb.copy()
     sel = (alpha > 0.04) & (alpha < 0.96)
     a = alpha[sel][:, None]
     out[sel] = np.clip((rgb[sel] - (1 - a) * BG) / a, 0, 255)
+
+    # затухание по краям кадра — прячет прямые срезы исходника
+    alpha = edge_fade(alpha)
     return out, alpha, R, wide
 
 
@@ -242,6 +301,28 @@ def verify_frame(path: Path, label: str):
     print(f"    дырки внутри фигуры: {len(inner)} шт, крупнейшие {inner[:3] if inner else '—'} px")
 
 
+def verify_edges(path: Path):
+    """Числа затухания по краям на готовом .webp (раздел «Кадры» в ТЗ)."""
+    arr = np.asarray(Image.open(path).convert("RGBA"))
+    alpha = arr[..., 3]
+    h, w = alpha.shape
+    xin = int(round(0.12 * w))                       # 0.12*w — глубина «внутри»
+    hair = (alpha[:, xin] > 200) & (alpha[:, w - 1 - xin] > 200)
+    n = int(hair.sum())
+    l2 = int(alpha[hair, 2].max()) if n else 0
+    r3 = int(alpha[hair, w - 3].max()) if n else 0
+    il = int(alpha[hair, xin].min()) if n else 0
+    ir = int(alpha[hair, w - 1 - xin].min()) if n else 0
+    top4 = int(alpha[:4, :].max())
+    print(f"\n  --- {path.name}: края ({w}x{h}, строк с волосами до края: {n}) ---")
+    print(f"    x=2      max alpha = {l2:3d}  (<= 40  {'OK' if l2 <= 40 else 'FAIL'})")
+    print(f"    x=w-3    max alpha = {r3:3d}  (<= 40  {'OK' if r3 <= 40 else 'FAIL'})")
+    print(f"    x=0.12w={xin:3d} min alpha = {il:3d}  (>= 200 {'OK' if il >= 200 else 'FAIL'})")
+    print(f"    x=w-1-0.12w  min alpha = {ir:3d}  (>= 200 {'OK' if ir >= 200 else 'FAIL'})")
+    print(f"    верхние 4 строки max alpha = {top4:3d}  (<= 40  {'OK' if top4 <= 40 else 'FAIL'})")
+    return l2 <= 40 and r3 <= 40 and il >= 200 and ir >= 200 and top4 <= 40
+
+
 def verify_outputs():
     files = sorted(OUT_DIR.glob("f*.webp"))
     if not files:
@@ -251,6 +332,8 @@ def verify_outputs():
     for idx, label in [(0, "старт, общий план"), (n // 2, "удивление, глаза открыты"),
                        (n - 1, "финал, крупный план")]:
         verify_frame(files[idx], label)
+    for idx in (0, min(90, n - 1)):
+        verify_edges(files[idx])
     total = sum(f.stat().st_size for f in files)
     print(f"\n[размер] {n} кадров = {total/1024/1024:.2f} MB, средний {total/n/1024:.1f} KB")
     if POSTER.exists():
@@ -281,7 +364,9 @@ def main():
 
     total = 0
     print(f"\n[matte] BG={BG.astype(int)} T_FLOOD={T_FLOOD} T_HARD={T_HARD} "
-          f"FEATHER={FEATHER} A_LO={A_LO} A_HI={A_HI} fade={BOTTOM_FADE:.0%}")
+          f"FEATHER={FEATHER} A_LO={A_LO} A_HI={A_HI}")
+    print(f"[fade]  низ={BOTTOM_FADE:.0%} бока={LR_FADE:.0%} верх={TOP_FADE:.0%} "
+          f"(ворота: touch>{EDGE_TOUCH}, dilate={EDGE_DILATE}px, sigma={EDGE_SIGMA})")
 
     wide_flags = []
     for i, p in enumerate(files):
